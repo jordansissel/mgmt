@@ -1,0 +1,15 @@
+-- main.mcl --
+$st = struct{
+	foo => "foo",
+}
+$items = ["item"]
+
+func some_func() {
+	$items[42]
+}
+
+$foo = some_func() <|> $st->foo <|> "default"
+
+test [$foo] {}
+-- OUTPUT --
+Vertex: test[foo]
