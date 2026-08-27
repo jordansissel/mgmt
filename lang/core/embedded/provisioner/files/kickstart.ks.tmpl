@@ -33,8 +33,10 @@ keyboard us
 {{ if .Timezone -}}
 # System timezone
 timezone {{ .Timezone }} --utc
-{{- if .Ntp_servers }} --ntpservers={{ golang_strings_join .Ntp_servers "," }}{{ end -}}
-{{- end }}
+{{ end -}}
+{{ range $server := .Ntp_servers -}}
+timesource --ntp-server {{ $server }}
+{{ end }}
 
 #
 #	security
