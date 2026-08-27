@@ -440,11 +440,11 @@ func (obj *VirtNetworkRes) Watch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recWatcher, err := recwatch.NewRecWatcher(dir, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, dir, false)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 	recChan := recWatcher.Events()
 
 	if err := obj.init.Event(ctx); err != nil {
@@ -463,6 +463,9 @@ func (obj *VirtNetworkRes) Watch(ctx context.Context) error {
 			}
 
 		case event, ok := <-recChan:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				recChan = nil
 				continue

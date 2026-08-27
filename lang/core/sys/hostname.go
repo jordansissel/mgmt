@@ -96,11 +96,11 @@ func (obj *Hostname) Init(init *interfaces.Init) error {
 // Stream returns the single value that this func has, and then closes.
 func (obj *Hostname) Stream(ctx context.Context) error {
 	recurse := false // single file
-	recWatcher, err := recwatch.NewRecWatcher("/etc/hostname", recurse)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, "/etc/hostname", recurse)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	// if we share the bus with others, we will get each others messages!!
 	bus, err := util.SystemBusPrivateUsable() // don't share the bus connection!
@@ -133,11 +133,17 @@ func (obj *Hostname) Stream(ctx context.Context) error {
 			startChan = nil // disable
 
 		case _, ok := <-signals:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
 
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -145,7 +151,7 @@ func (obj *Hostname) Stream(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
+			if err := event.Error; err != nil { // might be context.Canceled
 				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil

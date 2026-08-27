@@ -42,7 +42,6 @@ import (
 
 	"github.com/purpleidea/mgmt/engine"
 	"github.com/purpleidea/mgmt/engine/traits"
-	"github.com/purpleidea/mgmt/util/errwrap"
 	"github.com/purpleidea/mgmt/util/recwatch"
 	"github.com/purpleidea/mgmt/util/safepath"
 )
@@ -410,11 +409,11 @@ func (obj *HTTPServerFileRes) Watch(ctx context.Context) error {
 // long poll client.
 func (obj *HTTPServerFileRes) longpollWatch(ctx context.Context) error {
 
-	recWatcher, err := recwatch.NewRecWatcher(obj.Path, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.Path, false)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -423,6 +422,9 @@ func (obj *HTTPServerFileRes) longpollWatch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return nil // TODO: should we error?
 			}
@@ -430,8 +432,8 @@ func (obj *HTTPServerFileRes) longpollWatch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug {
 				obj.init.Logf("file changed, unblocking long poll clients")

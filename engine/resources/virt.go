@@ -270,11 +270,11 @@ func (obj *VirtRes) Watch(ctx context.Context) error {
 
 	// The golang API doesn't give us autostart change events, so we watch
 	// them manually by looking at this directory for symlink changes.
-	recWatcher, err := recwatch.NewRecWatcher("/etc/libvirt/qemu/autostart/", true)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, "/etc/libvirt/qemu/autostart/", true)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	// Our channel event sources...
 	domChan := make(chan libvirt.DomainEventType)
@@ -414,6 +414,9 @@ func (obj *VirtRes) Watch(ctx context.Context) error {
 			}
 
 		case event, ok := <-recChan:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				// TODO: Should we restart it?
 				recChan = nil
@@ -422,8 +425,8 @@ func (obj *VirtRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

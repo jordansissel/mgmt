@@ -198,11 +198,11 @@ Loop:
 
 // Watch is the primary listener for this resource and it outputs events.
 func (obj *PasswordRes) Watch(ctx context.Context) error {
-	recWatcher, err := recwatch.NewRecWatcher(obj.path, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.path, false)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -212,6 +212,9 @@ func (obj *PasswordRes) Watch(ctx context.Context) error {
 		select {
 		// NOTE: this part is very similar to the file resource code
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return nil
 			}
@@ -219,8 +222,8 @@ func (obj *PasswordRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 
 		case <-ctx.Done(): // closed by the engine to signal shutdown

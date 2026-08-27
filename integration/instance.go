@@ -365,11 +365,11 @@ func (obj *Instance) wait(ctx context.Context, requireActivity bool) error {
 	}
 
 	recurse := false
-	recWatcher, err := recwatch.NewRecWatcher(obj.convergerStatusFile, recurse)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.convergerStatusFile, recurse)
 	if err != nil {
 		return errwrap.Wrapf(err, "could not watch file")
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 	startup := make(chan struct{})
 	close(startup)
 	activity := !requireActivity
@@ -382,6 +382,9 @@ func (obj *Instance) wait(ctx context.Context, requireActivity bool) error {
 			// send an initial event
 
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				return fmt.Errorf("file watcher shut down")
 			}
@@ -389,8 +392,8 @@ func (obj *Instance) wait(ctx context.Context, requireActivity bool) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "error event received")
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			startup = nil
 			// send event...

@@ -32,6 +32,7 @@
 package recwatch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,13 +56,16 @@ func TestWatchDoesNotDescendPastLeaf(t *testing.T) {
 	}
 
 	logs := make(chan string, 16)
-	rw, err := NewRecWatcher(target, false, Debug(true), Logf(func(format string, v ...interface{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rw, err := NewRecWatcher(ctx, target, false, Debug(true), Logf(func(format string, v ...interface{}) {
 		logs <- fmt.Sprintf(format, v...)
 	}))
 	if err != nil {
+		cancel()
 		t.Fatalf("could not create watcher: %v", err)
 	}
-	defer rw.Close()
+	defer rw.Cleanup()
+	defer cancel()
 
 	events := rw.Events()
 	waitForWatchPath(t, logs, target)

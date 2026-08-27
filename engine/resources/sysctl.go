@@ -198,20 +198,20 @@ func (obj *SysctlRes) Watch(ctx context.Context) error {
 	var events1, events2 chan *recwatch.Event
 
 	if obj.Runtime {
-		recWatcher, err := recwatch.NewRecWatcher(obj.toPath(), recurse)
+		recWatcher, err := recwatch.NewRecWatcher(ctx, obj.toPath(), recurse)
 		if err != nil {
 			return err
 		}
-		defer recWatcher.Close()
+		defer recWatcher.Cleanup()
 		events1 = recWatcher.Events()
 	}
 
 	if obj.Persist {
-		recWatcher, err := recwatch.NewRecWatcher(obj.getFilename(), recurse)
+		recWatcher, err := recwatch.NewRecWatcher(ctx, obj.getFilename(), recurse)
 		if err != nil {
 			return err
 		}
-		defer recWatcher.Close()
+		defer recWatcher.Cleanup()
 		events2 = recWatcher.Events()
 	}
 
@@ -222,6 +222,9 @@ func (obj *SysctlRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-events1:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -229,7 +232,7 @@ func (obj *SysctlRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
+			if err := event.Error; err != nil { // might be context.Canceled
 				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
@@ -237,6 +240,9 @@ func (obj *SysctlRes) Watch(ctx context.Context) error {
 			}
 
 		case event, ok := <-events2:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -244,7 +250,7 @@ func (obj *SysctlRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
+			if err := event.Error; err != nil { // might be context.Canceled
 				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil

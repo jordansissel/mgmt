@@ -245,46 +245,43 @@ func (obj *MountRes) Watch(ctx context.Context) error {
 	defer conn.RemoveSignal(ch)
 
 	// watch the fstab file
-	recWatcher, err := recwatch.NewRecWatcher(fstabPath, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, fstabPath, false)
 	if err != nil {
 		return err
 	}
 	// close the recwatcher when we're done
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
 	}
 
-	var done bool
 	for {
 		select {
 		case event, ok := <-recWatcher.Events():
-			if !ok {
-				if done {
-					return ctx.Err()
-				}
-				done = true
-				continue
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
+			if !ok { // channel shutdown
+				return fmt.Errorf("unexpected close")
 			}
 			if event == nil {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown recwatcher error")
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug {
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)
 			}
 
 		case event, ok := <-ch:
-			if !ok {
-				if done {
-					return ctx.Err()
-				}
-				done = true
-				continue
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
+			if !ok { // channel shutdown
+				return fmt.Errorf("unexpected close")
 			}
 			if obj.init.Debug {
 				obj.init.Logf("event: %+v", event)

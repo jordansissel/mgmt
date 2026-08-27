@@ -336,11 +336,11 @@ func (obj *GsettingsRes) Watch(ctx context.Context) error {
 	}
 
 	// XXX: If the user is added by a different mechanism, we won't see it!
-	recWatcher, err := recwatch.NewRecWatcher(util.EtcPasswdFile, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, util.EtcPasswdFile, false)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -353,6 +353,9 @@ func (obj *GsettingsRes) Watch(ctx context.Context) error {
 
 		select {
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return nil
 			}
@@ -360,8 +363,8 @@ func (obj *GsettingsRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

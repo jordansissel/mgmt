@@ -466,11 +466,11 @@ func (obj *ExecRes) Watch(ctx context.Context) error {
 	}
 	for _, file := range fileList {
 		recurse := strings.HasSuffix(file, "/") // check if it's a file or dir
-		recWatcher, err := recwatch.NewRecWatcher(file, recurse)
+		recWatcher, err := recwatch.NewRecWatcher(context.Background(), file, recurse)
 		if err != nil {
 			return err
 		}
-		defer recWatcher.Close()
+		defer recWatcher.Cleanup()
 
 		obj.wg.Add(1)
 		go func() {
@@ -552,8 +552,8 @@ func (obj *ExecRes) Watch(ctx context.Context) error {
 			if event == nil {
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 
 		case <-ctx.Done(): // closed by the engine to signal shutdown

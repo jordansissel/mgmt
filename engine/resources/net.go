@@ -279,12 +279,12 @@ func (obj *NetRes) Watch(ctx context.Context) error {
 	defer conn.Shutdown() // close the netlink socket and unblock conn.receive()
 
 	// watch the systemd-networkd configuration file
-	recWatcher, err := recwatch.NewRecWatcher(obj.unitFilePath, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.unitFilePath, false)
 	if err != nil {
 		return err
 	}
 	// close the recwatcher when we're done
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	// channel for netlink messages
 	nlChan := make(chan *nlChanStruct) // closed from goroutine
@@ -328,6 +328,9 @@ func (obj *NetRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case s, ok := <-nlChan:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				if done {
 					return ctx.Err()
@@ -343,6 +346,9 @@ func (obj *NetRes) Watch(ctx context.Context) error {
 			}
 
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				if done {
 					return ctx.Err()
@@ -354,8 +360,8 @@ func (obj *NetRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown recwatcher error")
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug {
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

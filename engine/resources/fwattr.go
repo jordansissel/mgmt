@@ -524,11 +524,11 @@ func (obj *FWAttrRes) Watch(ctx context.Context) error {
 	}
 
 	recurse := false
-	recWatcher, err := recwatch.NewRecWatcher(obj.toPath(), recurse)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.toPath(), recurse)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -537,6 +537,9 @@ func (obj *FWAttrRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -544,7 +547,7 @@ func (obj *FWAttrRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
+			if err := event.Error; err != nil { // might be context.Canceled
 				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil

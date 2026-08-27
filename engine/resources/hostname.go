@@ -155,11 +155,11 @@ func (obj *HostnameRes) Cleanup() error {
 // Watch is the primary listener for this resource and it outputs events.
 func (obj *HostnameRes) Watch(ctx context.Context) error {
 	recurse := false // single file
-	recWatcher, err := recwatch.NewRecWatcher("/etc/hostname", recurse)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, "/etc/hostname", recurse)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	// if we share the bus with others, we will get each others messages!!
 	bus, err := util.SystemBusPrivateUsable() // don't share the bus connection!
@@ -188,12 +188,18 @@ func (obj *HostnameRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case _, ok := <-signals:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
 			//signals = nil
 
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -201,7 +207,7 @@ func (obj *HostnameRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
+			if err := event.Error; err != nil { // might be context.Canceled
 				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil

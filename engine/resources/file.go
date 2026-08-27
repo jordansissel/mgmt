@@ -433,25 +433,25 @@ func (obj *FileRes) Watch(ctx context.Context) error {
 	defer wg.Wait()
 
 	exit := make(chan struct{})
-	// TODO: should this be after (later in the file) than the `defer recWatcher.Close()` ?
-	// TODO: should this be after (later in the file) the `defer recWatcher.Close()` ?
+	// TODO: should this be after (later in the file) than the `defer recWatcher.Cleanup()` ?
+	// TODO: should this be after (later in the file) the `defer recWatcher.Cleanup()` ?
 	defer close(exit)
 
-	recWatcher, err := recwatch.NewRecWatcher(obj.getPath(), obj.Recurse)
+	recWatcher, err := recwatch.NewRecWatcher(context.Background(), obj.getPath(), obj.Recurse)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	// watch the various inputs to this file resource too!
 	if obj.Source != "" {
 		// This block is virtually identical to the below one.
 		recurse := strings.HasSuffix(obj.Source, "/") // isDir
-		rw, err := recwatch.NewRecWatcher(obj.Source, recurse)
+		rw, err := recwatch.NewRecWatcher(context.Background(), obj.Source, recurse)
 		if err != nil {
 			return err
 		}
-		defer rw.Close()
+		defer rw.Cleanup()
 
 		wg.Add(1)
 		go func() {
@@ -487,11 +487,11 @@ func (obj *FileRes) Watch(ctx context.Context) error {
 		// This block is virtually identical to the above one.
 		recurse := false // TODO: is it okay for depth==1 dirs?
 		//recurse := strings.HasSuffix(frag, "/") // isDir
-		rw, err := recwatch.NewRecWatcher(frag, recurse)
+		rw, err := recwatch.NewRecWatcher(context.Background(), frag, recurse)
 		if err != nil {
 			return err
 		}
-		defer rw.Close()
+		defer rw.Cleanup()
 
 		wg.Add(1)
 		go func() {
@@ -545,8 +545,8 @@ func (obj *FileRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)
@@ -560,8 +560,8 @@ func (obj *FileRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s input watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("input event(%s): %v", event.Body.Name, event.Body.Op)

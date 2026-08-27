@@ -31,6 +31,7 @@
 package recwatch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -40,6 +41,7 @@ import (
 	"syscall"
 
 	"github.com/purpleidea/mgmt/util"
+	"github.com/purpleidea/mgmt/util/errwrap"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -50,7 +52,8 @@ type Event struct {
 	Body  *fsnotify.Event
 }
 
-// RecWatcher is the struct for the recursive watcher. Run Init() on it.
+// RecWatcher is the struct for the recursive watcher. To start things up call
+// Run() on it.
 type RecWatcher struct {
 	// Path is the computer path that we're watching.
 	Path string
@@ -68,31 +71,36 @@ type RecWatcher struct {
 	watcher  *fsnotify.Watcher
 	watches  map[string]struct{}
 	events   chan *Event // one channel for events and err...
-	closed   bool        // is the events channel closed?
-	mutex    sync.Mutex  // lock guarding the channel closing
-	wg       sync.WaitGroup
-	exit     chan struct{}
+	wg       *sync.WaitGroup
+	cancel   context.CancelFunc // shuts down the watch goroutine
+	ready    func()
 }
 
-// NewRecWatcher creates an initializes a new recursive watcher.
-func NewRecWatcher(path string, recurse bool, opts ...Option) (*RecWatcher, error) {
+// NewRecWatcher creates and initializes a new recursive watcher. This returns
+// only once the watcher has started up or errored. This is ergonomic to use
+// because you can cancel this by closing the context, or by using the Cleanup
+// method.
+func NewRecWatcher(ctx context.Context, path string, recurse bool, opts ...Option) (*RecWatcher, error) {
 	obj := &RecWatcher{
 		Path:    path,
 		Recurse: recurse,
 		Opts:    opts,
 	}
-	return obj, obj.Init()
+	return obj, obj.Run(ctx)
 }
 
-// Init starts the recursive file watcher.
-func (obj *RecWatcher) Init() error {
-	obj.watcher = nil
-	obj.watches = make(map[string]struct{})
-	obj.events = make(chan *Event)
-	obj.exit = make(chan struct{})
-	obj.isDir = strings.HasSuffix(obj.Path, "/") // dirs have trailing slashes
-	obj.safename = path.Clean(obj.Path)          // no trailing slash
-	obj.options = &recwatchOptions{              // default recwatch options
+// Run starts the recursive file watcher. It returns only once the watcher has
+// started up or errored or exited.
+func (obj *RecWatcher) Run(ctx context.Context) (reterr error) {
+	ctx, obj.cancel = context.WithCancel(ctx)
+	defer func() {
+		if reterr != nil {
+			obj.cancel() // startup failed, nobody will call Cleanup
+		}
+	}()
+	obj.wg = &sync.WaitGroup{}
+
+	obj.options = &recwatchOptions{ // default recwatch options
 		debug: false,
 		logf: func(format string, v ...interface{}) {
 			// noop
@@ -112,30 +120,52 @@ func (obj *RecWatcher) Init() error {
 		return err
 	}
 
+	obj.watches = make(map[string]struct{})
+	obj.events = make(chan *Event)
+	obj.isDir = strings.HasSuffix(obj.Path, "/") // dirs have trailing slashes
+	obj.safename = path.Clean(obj.Path)          // no trailing slash
+
 	if obj.isDir {
 		if err := obj.addSubFolders(obj.safename); err != nil {
-			return err
+			// Startup failed before the watch goroutine ran, so we
+			// must close this ourselves here for it.
+			reterr := errwrap.Append(err, obj.watcher.Close())
+			obj.watcher = nil
+			return reterr
 		}
+	}
+
+	ready := make(chan struct{})
+	once := &sync.Once{}
+	obj.ready = func() {
+		once.Do(func() { close(ready) })
 	}
 
 	obj.wg.Add(1)
 	go func() {
 		defer obj.wg.Done()
-		if err := obj.Watch(); err != nil {
-			// we need this mutex, because if we Init and then Close
-			// immediately, this can send after closed which panics!
-			obj.mutex.Lock()
-			if !obj.closed {
-				select {
-				case obj.events <- &Event{Error: err}:
-				case <-obj.exit:
-					// pass
-				}
-			}
-			obj.mutex.Unlock()
+		defer close(obj.events)
+		// The watch goroutine owns the watcher for its entire lifetime,
+		// so it's usually responsible for closing it.
+		defer func() {
+			_ = obj.watcher.Close()
+		}()
+		err := obj.watch(ctx)
+		if err == nil {
+			return
+		}
+		select {
+		case obj.events <- &Event{Error: err}:
+		case <-ctx.Done():
 		}
 	}()
-	return nil
+
+	select {
+	case <-ready:
+		return nil // startup completed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 //func (obj *RecWatcher) Add(path string) error { // XXX: implement me or not?
@@ -146,31 +176,17 @@ func (obj *RecWatcher) Init() error {
 //
 //}
 
-// Close shuts down the watcher.
-func (obj *RecWatcher) Close() error {
-	var err error
-	close(obj.exit) // send exit signal
-	obj.wg.Wait()
-	if obj.watcher != nil {
-		err = obj.watcher.Close()
-		obj.watcher = nil
-	}
-	obj.mutex.Lock() // FIXME: I don't think this mutex is needed anymore...
-	obj.closed = true
-	close(obj.events)
-	obj.mutex.Unlock()
-	return err
+// Cleanup shuts the watcher down and waits for it to finish before returning.
+func (obj *RecWatcher) Cleanup() {
+	obj.cancel()  // signal shutdown...
+	obj.wg.Wait() // ...then wait for the watch goroutine to exit
 }
 
 // Events returns a channel of events. These include events for errors.
 func (obj *RecWatcher) Events() chan *Event { return obj.events }
 
-// Watch is the primary listener for this resource and it outputs events.
-// XXX: This should take a ctx instead of using Close()?
-func (obj *RecWatcher) Watch() error {
-	if obj.watcher == nil {
-		return fmt.Errorf("the watcher is not initialized")
-	}
+// watch is the primary listener for this resource and it outputs events.
+func (obj *RecWatcher) watch(ctx context.Context) error {
 
 	patharray := util.PathSplit(obj.safename) // tokenize the path
 	var index = len(patharray)                // starting index
@@ -216,6 +232,8 @@ func (obj *RecWatcher) Watch() error {
 
 			return fmt.Errorf("unknown error: %v", err)
 		}
+
+		obj.ready() // obj.watcher.Add(...) above has now completed...
 
 		select {
 		case event, ok := <-obj.watcher.Events:
@@ -360,8 +378,8 @@ func (obj *RecWatcher) Watch() error {
 
 			return fmt.Errorf("unknown watcher error: %v", err)
 
-		case <-obj.exit:
-			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 
 	Send:
@@ -372,8 +390,8 @@ func (obj *RecWatcher) Watch() error {
 			select {
 			// exit even when we're blocked on event sending
 			case obj.events <- &Event{Body: body}:
-			case <-obj.exit:
-				return fmt.Errorf("pending event not sent")
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	}
@@ -408,6 +426,7 @@ func (obj *RecWatcher) addSubFolders(p string) error {
 // Option is a type that can be used to configure the recwatcher.
 type Option func(*recwatchOptions)
 
+// recwatchOptions is the collections of options that users can set on recwatch.
 type recwatchOptions struct {
 	debug bool
 	logf  func(format string, v ...interface{})
@@ -428,6 +447,7 @@ func Logf(logf func(format string, v ...interface{})) Option {
 	}
 }
 
+// isDir is a simple helper to determine if a path is a dir on disk or not.
 func isDir(path string) bool {
 	finfo, err := os.Stat(path)
 	if err != nil {

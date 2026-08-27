@@ -121,10 +121,10 @@ func (obj *ModinfoLoadedFunc) Stream(ctx context.Context) error {
 			recwatch.Debug(obj.init.Debug),
 		},
 	}
-	if err := recWatcher.Init(); err != nil {
+	if err := recWatcher.Run(ctx); err != nil {
 		return errwrap.Wrapf(err, "could not watch file")
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	for {
 		select {
@@ -140,6 +140,9 @@ func (obj *ModinfoLoadedFunc) Stream(ctx context.Context) error {
 			obj.modulename = &modulename
 
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				return fmt.Errorf("no more events")
 			}
@@ -147,8 +150,8 @@ func (obj *ModinfoLoadedFunc) Stream(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "error event received")
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 
 			if obj.modulename == nil {

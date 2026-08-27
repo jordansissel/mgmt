@@ -193,11 +193,11 @@ func (obj *TarRes) Cleanup() error {
 // Watch is the primary listener for this resource and it outputs events.
 func (obj *TarRes) Watch(ctx context.Context) error {
 	recurse := false // single (output) file
-	recWatcher, err := recwatch.NewRecWatcher(obj.getPath(), recurse)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.getPath(), recurse)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	chanList := []<-chan *recwatch.Event{}
 	for _, x := range obj.Inputs {
@@ -207,11 +207,11 @@ func (obj *TarRes) Watch(ctx context.Context) error {
 		}
 		//recurse := strings.HasSuffix(x, "/") // recurse for dirs
 		recurse := fi.IsDir()
-		recWatcher, err := recwatch.NewRecWatcher(x, recurse)
+		recWatcher, err := recwatch.NewRecWatcher(ctx, x, recurse)
 		if err != nil {
 			return err
 		}
-		defer recWatcher.Close()
+		defer recWatcher.Cleanup()
 		ch := recWatcher.Events()
 		chanList = append(chanList, ch)
 	}
@@ -224,6 +224,9 @@ func (obj *TarRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				// TODO: Should this be an error? Previously it
 				// was a `return nil`, and i'm not sure why...
@@ -234,14 +237,17 @@ func (obj *TarRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)
 			}
 
 		case event, ok := <-events:
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				// TODO: Should this be an error? Previously it
 				// was a `return nil`, and i'm not sure why...
@@ -252,8 +258,8 @@ func (obj *TarRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

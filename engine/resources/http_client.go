@@ -444,11 +444,11 @@ func (obj *HTTPClientRes) Watch(ctx context.Context) error {
 	defer wg.Wait()
 
 	// In case someone messes with the dst file...
-	recWatcher, err := recwatch.NewRecWatcher(obj.dst, false)
+	recWatcher, err := recwatch.NewRecWatcher(ctx, obj.dst, false)
 	if err != nil {
 		return err
 	}
-	defer recWatcher.Close()
+	defer recWatcher.Cleanup()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -506,6 +506,9 @@ func (obj *HTTPClientRes) Watch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-recWatcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok { // channel shutdown
 				return fmt.Errorf("unexpected close")
 			}
@@ -513,8 +516,8 @@ func (obj *HTTPClientRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

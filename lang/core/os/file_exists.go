@@ -31,6 +31,7 @@ package coreos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -116,8 +117,7 @@ func (obj *FileExistsFunc) Stream(ctx context.Context) error {
 	defer wg.Wait()
 	defer func() {
 		if obj.recWatcher != nil {
-			_ = obj.recWatcher.Close() // close previous watcher
-			wg.Wait()
+			obj.recWatcher.Cleanup() // stop the previous watcher
 		}
 	}()
 	for {
@@ -142,19 +142,17 @@ func (obj *FileExistsFunc) Stream(ctx context.Context) error {
 			obj.filename = &filename
 
 			if obj.recWatcher != nil {
-				_ = obj.recWatcher.Close() // close previous watcher
+				obj.recWatcher.Cleanup() // stop the previous watcher
 				wg.Wait()
 			}
 			// create new watcher
-			obj.recWatcher = &recwatch.RecWatcher{
-				Path:    *obj.filename,
-				Recurse: false,
-				Opts: []recwatch.Option{
-					recwatch.Logf(obj.init.Logf),
-					recwatch.Debug(obj.init.Debug),
-				},
+			var err error
+			opts := []recwatch.Option{
+				recwatch.Logf(obj.init.Logf),
+				recwatch.Debug(obj.init.Debug),
 			}
-			if err := obj.recWatcher.Init(); err != nil {
+			obj.recWatcher, err = recwatch.NewRecWatcher(context.Background(), *obj.filename, false, opts...)
+			if err != nil {
 				obj.recWatcher = nil
 				// TODO: should we ignore the error and send ""?
 				return errwrap.Wrapf(err, "could not watch file")
@@ -186,6 +184,18 @@ func (obj *FileExistsFunc) Stream(ctx context.Context) error {
 							// programming error
 							err = fmt.Errorf("unexpected nil recwatch event")
 							break
+						}
+						// A filename switch runs
+						// Cleanup on this watcher,
+						// which can cause a return of
+						// context.Canceled. That's not
+						// a real error, so exit cleanly
+						// instead of forwarding it as
+						// that could block obj.events
+						// while the main loop is
+						// running wg.Wait().
+						if errors.Is(event.Error, context.Canceled) {
+							return
 						}
 						if err = event.Error; err != nil {
 							err = errwrap.Wrapf(err, "error event received")

@@ -163,17 +163,17 @@ func (obj *UserRes) Cleanup() error {
 // group. Tools like `gpasswd -a` only touch /etc/group, so without watching it
 // drift in the Groups field would never wake us.
 func (obj *UserRes) Watch(ctx context.Context) error {
-	passwdWatcher, err := recwatch.NewRecWatcher(util.EtcPasswdFile, false)
+	passwdWatcher, err := recwatch.NewRecWatcher(ctx, util.EtcPasswdFile, false)
 	if err != nil {
 		return err
 	}
-	defer passwdWatcher.Close()
+	defer passwdWatcher.Cleanup()
 
-	groupWatcher, err := recwatch.NewRecWatcher(util.EtcGroupFile, false)
+	groupWatcher, err := recwatch.NewRecWatcher(ctx, util.EtcGroupFile, false)
 	if err != nil {
 		return err
 	}
-	defer groupWatcher.Close()
+	defer groupWatcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -193,8 +193,8 @@ func (obj *UserRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)
@@ -208,8 +208,8 @@ func (obj *UserRes) Watch(ctx context.Context) error {
 				// programming error
 				return fmt.Errorf("unexpected nil recwatch event")
 			}
-			if err := event.Error; err != nil {
-				return errwrap.Wrapf(err, "unknown %s watcher error", obj)
+			if err := event.Error; err != nil { // might be context.Canceled
+				return err
 			}
 			if obj.init.Debug { // don't access event.Body if event.Error isn't nil
 				obj.init.Logf("event(%s): %v", event.Body.Name, event.Body.Op)

@@ -166,11 +166,11 @@ func (obj *JSONEditRes) Watch(ctx context.Context) error {
 
 // fileWatch watches a JSON document stored in a local file.
 func (obj *JSONEditRes) fileWatch(ctx context.Context) error {
-	watcher, err := recwatch.NewRecWatcher(obj.store.location, false)
+	watcher, err := recwatch.NewRecWatcher(ctx, obj.store.location, false)
 	if err != nil {
 		return errwrap.Wrapf(err, "could not watch JSON store")
 	}
-	defer watcher.Close()
+	defer watcher.Cleanup()
 
 	if err := obj.init.Event(ctx); err != nil {
 		return err
@@ -178,14 +178,17 @@ func (obj *JSONEditRes) fileWatch(ctx context.Context) error {
 	for {
 		select {
 		case event, ok := <-watcher.Events():
+			if ctx.Err() != nil {
+				return ctx.Err() // engine is shutting us down
+			}
 			if !ok {
 				return fmt.Errorf("unexpected close")
 			}
 			if event == nil {
 				return fmt.Errorf("the JSON store watch returned a nil event")
 			}
-			if event.Error != nil {
-				return errwrap.Wrapf(event.Error, "the JSON store watch failed")
+			if event.Error != nil { // might be context.Canceled
+				return event.Error
 			}
 
 		case <-ctx.Done():
