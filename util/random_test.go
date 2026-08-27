@@ -38,7 +38,7 @@ import (
 )
 
 func TestRandomStringSimpleLastCharacter(t *testing.T) {
-	result, err := randomStringSimple(bytes.NewReader([]byte{byte(len(RandomStringSimpleAlphabet) - 1)}), 1)
+	result, err := randomString(bytes.NewReader([]byte{byte(len(RandomStringSimpleAlphabet) - 1)}), 1, RandomStringSimpleAlphabet)
 	if err != nil {
 		t.Fatalf("could not generate random string: %v", err)
 	}

@@ -46,15 +46,25 @@ const RandomStringSimpleAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR
 // RandomStringSimple returns a cryptographically secure random string of the
 // requested length. It only uses the ASCII characters a-z and A-Z.
 func RandomStringSimple(length uint16) (string, error) {
-	return randomStringSimple(rand.Reader, length)
+	return randomString(rand.Reader, length, RandomStringSimpleAlphabet)
 }
 
-func randomStringSimple(reader io.Reader, length uint16) (string, error) {
+// RandomStringAlphabet returns a cryptographically secure random string of the
+// requested length containing characters from input alphabet.
+func RandomStringAlphabet(length uint16, alphabet string) (string, error) {
+	return randomString(rand.Reader, length, alphabet)
+}
+
+// randomString generates the random string of length from alphabet.
+func randomString(reader io.Reader, length uint16, alphabet string) (string, error) {
 	if reader == nil {
 		return "", fmt.Errorf("random reader is nil")
 	}
+	if len(alphabet) == 0 {
+		return "", fmt.Errorf("alphabet is empty")
+	}
 
-	limit := big.NewInt(int64(len(RandomStringSimpleAlphabet)))
+	limit := big.NewInt(int64(len(alphabet)))
 	var output strings.Builder
 	output.Grow(int(length))
 	for i := uint16(0); i < length; i++ {
@@ -62,7 +72,7 @@ func randomStringSimple(reader io.Reader, length uint16) (string, error) {
 		if err != nil {
 			return "", errwrap.Wrapf(err, "could not generate random string")
 		}
-		output.WriteByte(RandomStringSimpleAlphabet[value.Int64()])
+		output.WriteByte(alphabet[value.Int64()])
 	}
 
 	return output.String(), nil
