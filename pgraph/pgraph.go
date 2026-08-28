@@ -429,6 +429,7 @@ func (obj VertexSlice) Less(i, j int) bool {
 	a := obj[i].String()
 	b := obj[j].String()
 	if a == b { // fallback to ptr compare
+		// XXX: non-deterministic
 		return reflect.ValueOf(obj[i]).Pointer() < reflect.ValueOf(obj[j]).Pointer()
 	}
 	return a < b
@@ -462,6 +463,7 @@ func (obj *keyedVertexSlice) Swap(i, j int) {
 
 func (obj *keyedVertexSlice) Less(i, j int) bool {
 	if obj.keys[i] == obj.keys[j] { // fallback to ptr compare
+		// XXX: non-deterministic
 		return reflect.ValueOf(obj.vs[i]).Pointer() < reflect.ValueOf(obj.vs[j]).Pointer()
 	}
 	return obj.keys[i] < obj.keys[j]
