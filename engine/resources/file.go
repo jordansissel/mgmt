@@ -1295,8 +1295,11 @@ func (obj *FileRes) chmodCheckApply(ctx context.Context, apply bool) (bool, erro
 		return false, err
 	}
 
-	// nothing to do
-	if fileInfo.Mode() == mode {
+	// NOTE: We must mask off the file type bits (eg: os.ModeDir) since
+	// fileInfo.Mode() carries them but an octal mode like "755" does not!
+	// This never compare equal for a dir and cause an infinite loop!
+	if fileInfo.Mode()&^os.ModeType == mode&^os.ModeType {
+		// nothing to do
 		return true, nil
 	}
 
