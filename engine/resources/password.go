@@ -53,7 +53,13 @@ const (
 	newline = "\n" // the standard newline
 )
 
-// PasswordRes is a no-op resource that sends out a random password string.
+// PasswordRes is a no-op resource that generates a random password string. It
+// sends the generated password to other resources via send/recv, and also
+// publishes it over the local Bridge API so that it can be read back into the
+// language with the res/password value function, for example:
+// password.value("name") <|> "hunter2". That function returns a catchable error
+// until we've generated a password, which lets the except operator supply a
+// fallback in the meantime.
 type PasswordRes struct {
 	traits.Base // add the base methods without re-implementation
 	// TODO: it could be useful to group our tokens into a single write, and
@@ -135,7 +141,24 @@ func (obj *PasswordRes) Init(init *engine.Init) error {
 
 // Cleanup is run by the engine to clean up after the resource is done.
 func (obj *PasswordRes) Cleanup() error {
-	return nil
+	// Unpublish our password from the local Bridge API so that any consumer
+	// of the res/password value function reverts to erroring (and can pick
+	// up its except fallback) once we're no longer running.
+	return obj.init.Local.BridgeSet(context.Background(), obj.Kind(), obj.Name(), nil)
+}
+
+// publish sends the generated password to the local Bridge API so that the
+// res/password value function can read it back. We use our resource kind as the
+// namespace and our name as the uid. We publish the exact same value that we
+// send over send/recv (so it honours the Newline param) to avoid the surprise
+// of the function and send/recv disagreeing about our output. An empty password
+// is never published, so that consumers keep erroring (and can use the except
+// operator to fall back) until we've actually generated one.
+func (obj *PasswordRes) publish(ctx context.Context, password string) error {
+	if password == "" {
+		return nil // nothing valid to publish yet
+	}
+	return obj.init.Local.BridgeSet(ctx, obj.Kind(), obj.Name(), password)
 }
 
 // read is a helper to read the data from disk. This is similar to an engineUtil
@@ -322,6 +345,9 @@ func (obj *PasswordRes) CheckApply(ctx context.Context, apply bool) (bool, error
 		}); err != nil {
 			return false, err
 		}
+		if err := obj.publish(ctx, p); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	// a refresh was requested, the token doesn't exist, or the check failed
@@ -364,6 +390,9 @@ func (obj *PasswordRes) CheckApply(ctx context.Context, apply bool) (bool, error
 	if err := obj.init.Send(&PasswordSends{
 		Password: &p,
 	}); err != nil {
+		return false, err
+	}
+	if err := obj.publish(ctx, p); err != nil {
 		return false, err
 	}
 
