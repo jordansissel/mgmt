@@ -36,6 +36,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/gob"
+	"os"
 	"testing"
 
 	"github.com/purpleidea/mgmt/engine"
@@ -340,5 +341,39 @@ func TestFileSELinuxCmp(t *testing.T) {
 	}
 	if err := f1.Cmp(f4); err == nil {
 		t.Errorf("param SELinux vs nil SELinux should not match")
+	}
+}
+
+func TestFileModeOctal(t *testing.T) {
+	// The traditional unix setuid/setgid/sticky bits (04000, 02000, 01000)
+	// live in different positions than the os.FileMode bits that os.Chmod
+	// and fileInfo.Mode() use, so an octal mode string must translate them.
+	// Without that, eg: "4755" parses to os.FileMode(0o4755) which is
+	// neither os.ModeSetuid nor equal to what the filesystem reports, so
+	// chmodCheckApply would never converge.
+	tests := []struct {
+		mode string
+		out  os.FileMode
+	}{
+		{"755", os.FileMode(0755)},
+		{"0644", os.FileMode(0644)},
+		{"4755", os.FileMode(0755) | os.ModeSetuid},
+		{"2755", os.FileMode(0755) | os.ModeSetgid},
+		{"1755", os.FileMode(0755) | os.ModeSticky},
+		{"7755", os.FileMode(0755) | os.ModeSetuid | os.ModeSetgid | os.ModeSticky},
+	}
+	for _, test := range tests {
+		f := &FileRes{
+			Path: "/tmp/foo",
+			Mode: test.mode,
+		}
+		m, err := f.mode()
+		if err != nil {
+			t.Errorf("mode %q: %v", test.mode, err)
+			continue
+		}
+		if m != test.out {
+			t.Errorf("mode %q: got %s (%#o), want %s (%#o)", test.mode, m, m, test.out, test.out)
+		}
 	}
 }

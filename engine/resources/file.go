@@ -257,7 +257,21 @@ func (obj *FileRes) isDir() bool {
 func (obj *FileRes) mode() (os.FileMode, error) {
 	// First check if this is an octal number.
 	if n, err := strconv.ParseUint(obj.Mode, 8, 32); err == nil {
-		return os.FileMode(n), nil
+		// The traditional unix setuid/setgid/sticky bits (04000, 02000,
+		// 01000) are not the same bits that os.FileMode uses to store
+		// them, so translate them or they'd be silently ignored by both
+		// the comparison and os.Chmod.
+		m := os.FileMode(n) & os.ModePerm
+		if n&0o4000 != 0 {
+			m |= os.ModeSetuid
+		}
+		if n&0o2000 != 0 {
+			m |= os.ModeSetgid
+		}
+		if n&0o1000 != 0 {
+			m |= os.ModeSticky
+		}
+		return m, nil
 	}
 
 	// Try parsing symbolically by first getting the files current mode.
