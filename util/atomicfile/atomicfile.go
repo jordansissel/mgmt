@@ -32,6 +32,7 @@
 package atomicfile
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -94,15 +95,17 @@ func (obj *AtomicFile) Commit() error {
 // A default "create a nearby tempfile" strategy
 func openTemp(fspath string) (*os.File, error) {
 	f, err := os.CreateTemp(path.Dir(fspath), path.Base(fspath)+".new*")
-	if err, ok := err.(*fs.PathError); ok && err.Err == unix.EACCES {
-		var err2 error
-		f, err2 = os.CreateTemp("", path.Base(fspath)+".new*")
-		if err2 != nil {
-			// XXX: Return a composite error of err+err2?
-			return nil, err2
+	if err, ok := err.(*fs.PathError); ok {
+		if err.Err == unix.ENOENT || err.Err == unix.EACCES {
+			var err2 error
+			f, err2 = os.CreateTemp("", path.Base(fspath)+".new*")
+			if err2 != nil {
+				// XXX: Return a composite error of err+err2?
+				return nil, err2
+			}
+		} else {
+			return nil, err
 		}
-	} else if err != nil {
-		return nil, err
 	}
 
 	// Delete the filename while leaving the file open.
@@ -113,4 +116,36 @@ func openTemp(fspath string) (*os.File, error) {
 	}
 
 	return f, nil
+}
+
+// Open the existing path for writing and copy our data into it.
+// This is a last resort to write the data in cases where atomic operations
+// like rename(2) are not available.
+func (obj *AtomicFile) commitByCopy() error {
+
+	// Truncate the file and open it for writing.
+	// This is not "atomic" but this function is a fallback for cases
+	// where atomic methods do not work.
+	file, err := os.OpenFile(obj.path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Move the reader to the beginning of our temporary file.
+	obj.Seek(0, io.SeekStart)
+
+	if _, err = io.Copy(file, obj); err != nil {
+		return err
+	}
+
+	if err = file.Sync(); err != nil {
+		if err, ok := err.(*fs.PathError); ok && err.Err == unix.EINVAL {
+			// Filesystem likely doesn't support fsync. Safe to ignore.
+		} else {
+			return err
+		}
+	}
+
+	return nil
 }

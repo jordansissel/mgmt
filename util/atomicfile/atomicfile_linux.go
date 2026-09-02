@@ -32,7 +32,6 @@
 package atomicfile
 
 import (
-	"io"
 	"io/fs"
 	"math/rand/v2"
 	"os"
@@ -113,28 +112,6 @@ func (obj *AtomicFile) commit() error {
 	} else {
 		return obj.commitByCopy()
 	}
-}
-
-func (obj *AtomicFile) commitByCopy() error {
-	temp, err := os.CreateTemp("", path.Base(obj.path))
-	if err != nil {
-		return err
-	}
-
-	defer os.Remove(temp.Name())
-	defer temp.Close()
-
-	file, err := os.OpenFile(obj.path, os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	if _, err = io.Copy(file, temp); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (obj *AtomicFile) commitWithLinkat() error {
