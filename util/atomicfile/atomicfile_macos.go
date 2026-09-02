@@ -33,25 +33,12 @@ package atomicfile
 
 import (
 	"os"
-	"path"
 
 	"golang.org/x/sys/unix"
 )
 
 func open(fspath string) (*os.File, error) {
-	f, err := os.CreateTemp(path.Dir(fspath), path.Base(fspath)+".new*")
-	if err != nil {
-		return nil, err
-	}
-
-	// Delete the filename while leaving the file open.
-	// The file will get a real name on disk during commit()
-	err = os.Remove(f.Name())
-	if err != nil {
-		return nil, err
-	}
-
-	return f, nil
+	return openTemp(fspath)
 }
 
 func (obj *AtomicFile) commit() error {

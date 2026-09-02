@@ -32,8 +32,12 @@
 package atomicfile
 
 import (
+	"io"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
@@ -47,39 +51,130 @@ func open(fspath string) (*os.File, error) {
 	// > Create an unnamed temporary regular file.  The path
 	// > argument specifies a directory; an unnamed inode will be
 	// > created in that directory's filesystem.
-	return os.OpenFile(path.Dir(fspath), unix.O_RDWR|unix.O_TMPFILE, 0600)
+	//
+	// Where a filesystem doesn't support O_TMPFILE, open() will return
+	// EOPNOTSUPP.
+	dir := path.Dir(fspath)
+	f, err := os.OpenFile(dir, unix.O_RDWR|unix.O_TMPFILE, 0600)
+	if err == nil {
+		return f, nil
+	}
+
+	// Check if OpenFile failed because O_TMPFILE isn't supported by the
+	// filesystem.
+	if err, ok := err.(*fs.PathError); ok && err.Err == unix.EOPNOTSUPP {
+		// O_TMPFILE doesn't work on this filesystem, try another method.
+		return openTemp(fspath)
+	}
+
+	return nil, err
+}
+
+func (obj *AtomicFile) onSameFilesystem() (bool, error) {
+	conn, err := obj.SyscallConn()
+	if err != nil {
+		return false, err
+	}
+
+	var srcstat, dststat unix.Stat_t
+	conn.Control(func(fd uintptr) {
+		err = unix.Fstat(int(fd), &srcstat)
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if err = unix.Stat(obj.path, &dststat); err != nil {
+		if os.IsNotExist(err) {
+			// Full path doesn't exist. Check the parent directory.
+			if err = unix.Stat(path.Dir(obj.path), &dststat); err != nil {
+				return false, err
+			}
+
+			return srcstat.Dev == dststat.Dev, nil
+		}
+		return false, err
+	}
+
+	return srcstat.Dev == dststat.Dev, nil
 }
 
 func (obj *AtomicFile) commit() error {
-	temp, err := os.CreateTemp(path.Dir(obj.path), path.Base(obj.path)+".new*")
+	same, err := obj.onSameFilesystem()
 	if err != nil {
 		return err
 	}
+	if same {
+		err = obj.commitWithLinkat()
+		if err, ok := err.(*fs.PathError); ok && err.Err == unix.EACCES {
+			return obj.commitByCopy()
+		}
+		return err
+	} else {
+		return obj.commitByCopy()
+	}
+}
+
+func (obj *AtomicFile) commitByCopy() error {
+	temp, err := os.CreateTemp("", path.Base(obj.path))
+	if err != nil {
+		return err
+	}
+
+	defer os.Remove(temp.Name())
 	defer temp.Close()
 
-	err = os.Remove(temp.Name())
+	file, err := os.OpenFile(obj.path, os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
-	// Note: There is a race condition here between the Remove and Linkat calls.
-	// Above, CreateTemp is used to create a temporary, named file. It is removed
-	// in order to link our unnamed file to that pathname.
-	//
-	// If, between the Remove and Linkat, something else creates a file with the
-	// same name, the Linkat call will fail due to the filename already existing..
-	//
-	// A future improvement would be to try (possibly multiple times) different
-	// names to give to our temporary file.
+	defer file.Close()
 
-	// Previously, our open() func used O_TMPFILE to create an unnamed file, and
-	// in order to rename(2) to deliver our committed file, we must give our
-	// unnamed file a name!
-	// See linkat(2) and open(2)'s O_TMPFILE documentation on Linux for more information.
-	err = unix.Linkat(int(obj.Fd()), "", unix.AT_FDCWD, temp.Name(), unix.AT_EMPTY_PATH)
-	if err != nil {
+	if _, err = io.Copy(file, temp); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (obj *AtomicFile) commitWithLinkat() error {
+	try := 0
+	base := path.Join(
+		path.Dir(obj.path),
+		path.Base(obj.path)+".new-",
+	)
+
+	// Select a filename that doesn't exist yet in order to give our
+	// currently unnamed file a real name so that we can rename() it.
+	//
+	// Note: This for loop was modeled after golang's CreateTemp implementation
+	var current string
+	for {
+		current = base + strconv.FormatUint(rand.Uint64(), 16)
+
+		// Previously, our open() func should have created an unnamed file. In
+		// order to rename(2) to deliver our committed file, we must give our
+		// unnamed file a name!
+		// See linkat(2) and open(2)'s O_TMPFILE documentation on Linux for more
+		// information.
+		err := unix.Linkat(int(obj.Fd()), "", unix.AT_FDCWD, current, unix.AT_EMPTY_PATH)
+		if err != nil {
+			if os.IsExist(err) {
+				if try++; try < 10000 {
+					continue
+				}
+
+				// Exhausted tries.
+				return &os.PathError{Op: "linkat", Path: current, Err: err}
+			} else {
+				return err
+			}
+		}
+
+		// Linkat succeeded!
+		break
+	}
+
 	defer obj.Close()
-
-	return os.Rename(temp.Name(), obj.path)
+	return os.Rename(current, obj.path)
 }

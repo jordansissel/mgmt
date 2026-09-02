@@ -32,7 +32,11 @@
 package atomicfile
 
 import (
+	"io/fs"
 	"os"
+	"path"
+
+	"golang.org/x/sys/unix"
 )
 
 // AtomicFile is an os.File-like struct which allows you to write data and
@@ -85,4 +89,28 @@ func (obj *AtomicFile) Commit() error {
 	_ = obj.Close()
 
 	return err
+}
+
+// A default "create a nearby tempfile" strategy
+func openTemp(fspath string) (*os.File, error) {
+	f, err := os.CreateTemp(path.Dir(fspath), path.Base(fspath)+".new*")
+	if err, ok := err.(*fs.PathError); ok && err.Err == unix.EACCES {
+		var err2 error
+		f, err2 = os.CreateTemp("", path.Base(fspath)+".new*")
+		if err2 != nil {
+			// XXX: Return a composite error of err+err2?
+			return nil, err2
+		}
+	} else if err != nil {
+		return nil, err
+	}
+
+	// Delete the filename while leaving the file open.
+	// The file will get a real name on disk during commit()
+	err = os.Remove(f.Name())
+	if err != nil {
+		return nil, err
+	}
+
+	return f, nil
 }
